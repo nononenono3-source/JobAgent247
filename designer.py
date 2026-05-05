@@ -14,6 +14,13 @@ from PIL import Image, ImageDraw, ImageFont
 Category = Literal["fresher", "pro", "uncategorized"]
 
 
+def _safe_text(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
+
+
 @dataclass(frozen=True)
 class Job:
     category: Category
@@ -33,25 +40,25 @@ class Job:
 def _read_jobs_json(path: str) -> list[Job]:
     with open(path, "r", encoding="utf-8") as f:
         payload = json.load(f)
-    jobs_raw = payload.get("jobs", payload)
+    jobs_raw = payload.get("jobs", payload) if isinstance(payload, dict) else payload
     jobs: list[Job] = []
-    for item in jobs_raw:
+    for item in jobs_raw if isinstance(jobs_raw, list) else []:
         if not isinstance(item, dict):
             continue
         jobs.append(
             Job(
-                category=item.get("category", "uncategorized"),
-                title=str(item.get("title", "")).strip(),
-                company=str(item.get("company", "")).strip(),
-                location=str(item.get("location", "")).strip(),
+                category=_safe_text(item.get("category"), "uncategorized"),
+                title=_safe_text(item.get("title")),
+                company=_safe_text(item.get("company")),
+                location=_safe_text(item.get("location")),
                 is_remote=bool(item.get("is_remote", False)),
                 salary_min=item.get("salary_min"),
                 salary_max=item.get("salary_max"),
                 salary_currency=item.get("salary_currency"),
-                url=str(item.get("url", "")).strip(),
-                description=str(item.get("description", "")).strip(),
-                source=str(item.get("source", "")).strip(),
-                country=str(item.get("country", "")).strip(),
+                url=_safe_text(item.get("url")),
+                description=_safe_text(item.get("description")),
+                source=_safe_text(item.get("source")),
+                country=_safe_text(item.get("country")),
             )
         )
     return jobs
@@ -83,6 +90,19 @@ def _pick_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | Ima
         except Exception:
             continue
     return ImageFont.load_default()
+
+
+def _font_line_height(font: ImageFont.ImageFont) -> int:
+    try:
+        if hasattr(font, "size") and isinstance(font.size, int):
+            return max(font.size, 16)
+    except Exception:
+        pass
+    try:
+        bbox = font.getbbox("Ag")
+        return max(int(bbox[3] - bbox[1]), 16)
+    except Exception:
+        return 24
 
 
 def _format_salary(job: Job) -> str:
@@ -133,8 +153,9 @@ def _badge(
     text_fill: str = "white",
 ) -> tuple[int, int, int, int]:
     w = int(draw.textlength(text, font=font))
+    line_height = _font_line_height(font)
     left, top = x, y
-    right, bottom = x + w + pad_x * 2, y + font.size + pad_y * 2
+    right, bottom = x + w + pad_x * 2, y + line_height + pad_y * 2
     _rounded_rect(draw, (left, top, right, bottom), radius=radius, fill=fill)
     draw.text((left + pad_x, top + pad_y), text, font=font, fill=text_fill)
     return (left, top, right, bottom)
@@ -326,6 +347,23 @@ def re_sub_whitespace(s: str) -> str:
     return " ".join((s or "").split())
 
 
+def _fallback_slide(*, size: tuple[int, int], idx: int, total: int, message: str) -> Image.Image:
+    w, h = size
+    img = _bg(size, theme="neutral")
+    draw = ImageDraw.Draw(img)
+    title_font = _pick_font(54, bold=True)
+    body_font = _pick_font(30)
+    draw.rounded_rectangle((60, 120, w - 60, h - 140), radius=32, fill="#0B1220")
+    draw.text((100, 180), "JobAgent247", font=title_font, fill="white")
+    lines = textwrap.wrap(re_sub_whitespace(message) or "Content unavailable.", width=34)
+    y = 290
+    for line in lines[:8]:
+        draw.text((100, y), line, font=body_font, fill="#E5E7EB")
+        y += 42
+    _draw_footer(draw, w=w, h=h, idx=idx, total=total)
+    return img
+
+
 def build_carousel(
     *,
     jobs: list[Job],
@@ -343,23 +381,43 @@ def build_carousel(
 
     slides: list[Image.Image] = []
     total = 2 + len(fresher) + len(pro)
-
-    slides.append(_hook_slide(size=size, idx=1, total=total, audience="fresher", jobs=fresher))
-    slides.append(_hook_slide(size=size, idx=2, total=total, audience="pro", jobs=pro))
+    try:
+        slides.append(_hook_slide(size=size, idx=1, total=total, audience="fresher", jobs=fresher))
+    except Exception as exc:
+        print(f"Warning: failed to build fresher hook slide: {exc}")
+        slides.append(_fallback_slide(size=size, idx=1, total=total, message="Freshers jobs are temporarily unavailable. Check the PDF for details."))
+    try:
+        slides.append(_hook_slide(size=size, idx=2, total=total, audience="pro", jobs=pro))
+    except Exception as exc:
+        print(f"Warning: failed to build pro hook slide: {exc}")
+        slides.append(_fallback_slide(size=size, idx=2, total=total, message="Pro jobs are temporarily unavailable. Check the PDF for details."))
 
     idx = 3
     for j in fresher:
-        slides.append(_job_slide(size=size, idx=idx, total=total, job=j))
+        try:
+            slides.append(_job_slide(size=size, idx=idx, total=total, job=j))
+        except Exception as exc:
+            print(f"Warning: failed to build fresher slide {idx}: {exc}")
+            slides.append(_fallback_slide(size=size, idx=idx, total=total, message=f"Job slide unavailable for {j.title or 'this role'}. Check the PDF for full details."))
         idx += 1
     for j in pro:
-        slides.append(_job_slide(size=size, idx=idx, total=total, job=j))
+        try:
+            slides.append(_job_slide(size=size, idx=idx, total=total, job=j))
+        except Exception as exc:
+            print(f"Warning: failed to build pro slide {idx}: {exc}")
+            slides.append(_fallback_slide(size=size, idx=idx, total=total, message=f"Job slide unavailable for {j.title or 'this role'}. Check the PDF for full details."))
         idx += 1
 
     os.makedirs(out_dir, exist_ok=True)
     paths: list[str] = []
     for i, img in enumerate(slides, start=1):
         p = os.path.join(out_dir, f"slide_{i:02d}.png")
-        img.save(p, format="PNG", optimize=True)
+        try:
+            img.save(p, format="PNG", optimize=True)
+        except Exception as exc:
+            print(f"Warning: failed to save slide {i}: {exc}")
+            fallback = _fallback_slide(size=size, idx=i, total=total, message="A slide could not be rendered. Check the PDF for full details.")
+            fallback.save(p, format="PNG", optimize=True)
         paths.append(p)
     return paths
 

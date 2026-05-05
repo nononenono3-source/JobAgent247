@@ -26,6 +26,49 @@ def require(name: str) -> str:
 # ----------------------------
 
 
+def _graph_error_message(resp: requests.Response) -> str:
+    try:
+        payload = resp.json()
+    except ValueError:
+        return resp.text.strip() or f"HTTP {resp.status_code}"
+
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return json.dumps(payload, ensure_ascii=False)
+
+    message = str(error.get("message") or f"HTTP {resp.status_code}")
+    code = error.get("code")
+    error_type = error.get("type")
+    subcode = error.get("error_subcode")
+    if "token" in message.lower() or code in {190}:
+        message = f"Instagram token issue: {message}"
+    details = [part for part in [error_type, f"code={code}" if code else "", f"subcode={subcode}" if subcode else ""] if part]
+    return f"{message} ({', '.join(details)})" if details else message
+
+
+def _graph_post(*, url: str, data: dict[str, str]) -> dict:
+    try:
+        resp = requests.post(url, data=data, timeout=60)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Instagram Graph API request failed: {exc}") from exc
+    if not resp.ok:
+        raise RuntimeError(_graph_error_message(resp))
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise RuntimeError("Instagram Graph API returned non-JSON data.") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Instagram Graph API returned an unexpected payload shape.")
+    return payload
+
+
+def _ensure_docs_base_url(base: str) -> str:
+    base = (base or "").strip().rstrip("/")
+    if not base:
+        return base
+    return base if base.endswith("/docs") else f"{base}/docs"
+
+
 def instagram_create_image_container(*, image_url: str, caption: str = "") -> str:
     """
     Creates an IG media container for an image (for carousel).
@@ -36,58 +79,66 @@ def instagram_create_image_container(*, image_url: str, caption: str = "") -> st
     token = require("INSTAGRAM_TOKEN")
     ig_user_id = require("INSTAGRAM_IG_USER_ID")
     url = f"https://graph.facebook.com/v19.0/{ig_user_id}/media"
-    resp = requests.post(
-        url,
+    payload = _graph_post(
+        url=url,
         data={
             "image_url": image_url,
             "caption": caption,
             "is_carousel_item": "true",
             "access_token": token,
         },
-        timeout=60,
     )
-    resp.raise_for_status()
-    return resp.json()["id"]
+    container_id = str(payload.get("id") or "").strip()
+    if not container_id:
+        raise RuntimeError(f"Instagram did not return a media container ID for image URL: {image_url}")
+    return container_id
 
 
 def instagram_create_carousel_container(*, children: list[str], caption: str) -> str:
+    if len(children) < 2:
+        raise RuntimeError("Instagram carousel publish requires at least 2 child media containers.")
     token = require("INSTAGRAM_TOKEN")
     ig_user_id = require("INSTAGRAM_IG_USER_ID")
     url = f"https://graph.facebook.com/v19.0/{ig_user_id}/media"
-    resp = requests.post(
-        url,
+    payload = _graph_post(
+        url=url,
         data={
             "media_type": "CAROUSEL",
             "children": ",".join(children),
             "caption": caption,
             "access_token": token,
         },
-        timeout=60,
     )
-    resp.raise_for_status()
-    return resp.json()["id"]
+    container_id = str(payload.get("id") or "").strip()
+    if not container_id:
+        raise RuntimeError("Instagram did not return a carousel container ID.")
+    return container_id
 
 
 def instagram_publish(*, creation_id: str) -> str:
     token = require("INSTAGRAM_TOKEN")
     ig_user_id = require("INSTAGRAM_IG_USER_ID")
     url = f"https://graph.facebook.com/v19.0/{ig_user_id}/media_publish"
-    resp = requests.post(url, data={"creation_id": creation_id, "access_token": token}, timeout=60)
-    resp.raise_for_status()
-    return resp.json()["id"]
+    payload = _graph_post(url=url, data={"creation_id": creation_id, "access_token": token})
+    published_id = str(payload.get("id") or "").strip()
+    if not published_id:
+        raise RuntimeError("Instagram publish succeeded without returning a media ID.")
+    return published_id
 
 
 def post_instagram_carousel(*, image_urls: list[str], caption: str) -> str:
     """
     Publish a carousel from public image URLs.
     """
+    if len(image_urls) < 2:
+        raise RuntimeError("Instagram carousel upload requires at least 2 public image URLs.")
     child_ids = [instagram_create_image_container(image_url=u) for u in image_urls]
     creation_id = instagram_create_carousel_container(children=child_ids, caption=caption)
     return instagram_publish(creation_id=creation_id)
 
 
 def _join_url(base: str, path: str) -> str:
-    base = (base or "").strip().rstrip("/")
+    base = _ensure_docs_base_url(base).rstrip("/")
     path = (path or "").strip().lstrip("/")
     return f"{base}/{path}"
 
@@ -108,7 +159,9 @@ def post_instagram_carousel_from_pages_assets(*, slide_filenames: list[str], cap
       2) Create carousel container from those item container IDs
       3) Publish carousel container
     """
-    base = require("GITHUB_PAGES_BASE_URL")
+    if len(slide_filenames) < 2:
+        raise RuntimeError("docs/assets/manifest.json must contain at least 2 slides for an Instagram carousel.")
+    base = _ensure_docs_base_url(require("GITHUB_PAGES_BASE_URL"))
     image_urls = [_join_url(base, f"assets/{name}") for name in slide_filenames]
     child_ids = [instagram_create_image_container(image_url=u) for u in image_urls]
     carousel_id = instagram_create_carousel_container(children=child_ids, caption=caption)
@@ -181,10 +234,15 @@ def upload_youtube_video(
             pct = int(status.progress() * 100)
             print(f"Upload progress: {pct}%")
 
-    vid = resp["id"]
+    vid = str((resp or {}).get("id") or "").strip()
+    if not vid:
+        raise RuntimeError("YouTube upload completed without returning a video ID.")
 
     if thumbnail_path:
-        youtube.thumbnails().set(videoId=vid, media_body=MediaFileUpload(thumbnail_path)).execute()
+        try:
+            youtube.thumbnails().set(videoId=vid, media_body=MediaFileUpload(thumbnail_path)).execute()
+        except Exception as exc:
+            print(f"Warning: thumbnail upload skipped/failed: {exc}")
 
     return vid
 

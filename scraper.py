@@ -203,16 +203,29 @@ def _safe_get(obj: dict[str, Any], path: Iterable[str], default: str = "") -> st
     return cur if isinstance(cur, str) else default
 
 
+def _safe_text(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 def normalize_adzuna_result(country: str, item: dict[str, Any]) -> Job:
-    title = (item.get("title") or "").strip()
+    title = _safe_text(item.get("title"), "Untitled")
     company = _safe_get(item, ["company", "display_name"], default="").strip() or "Unknown"
     location = _safe_get(item, ["location", "display_name"], default="").strip() or "Unknown"
-    description = (item.get("description") or "").strip()
-    url = (item.get("redirect_url") or item.get("adref") or "").strip()
+    description = _safe_text(item.get("description"), "Description not provided.")
+    url = _safe_text(item.get("redirect_url") or item.get("adref"))
 
-    salary_min = item.get("salary_min")
-    salary_max = item.get("salary_max")
-    salary_currency = item.get("salary_currency")
+    salary_min = _safe_float(item.get("salary_min"))
+    salary_max = _safe_float(item.get("salary_max"))
+    salary_currency = _safe_text(item.get("salary_currency")) or None
 
     is_remote = detect_remote(location, description)
     category = categorize_job(title=title, description=description)
@@ -223,10 +236,10 @@ def normalize_adzuna_result(country: str, item: dict[str, Any]) -> Job:
         company=company,
         location=location,
         is_remote=is_remote,
-        salary_min=float(salary_min) if isinstance(salary_min, (int, float)) else None,
-        salary_max=float(salary_max) if isinstance(salary_max, (int, float)) else None,
-        salary_currency=salary_currency if isinstance(salary_currency, str) else None,
-        url=url or "",
+        salary_min=salary_min,
+        salary_max=salary_max,
+        salary_currency=salary_currency,
+        url=url,
         description=description,
         source="adzuna",
         country=country,
@@ -256,22 +269,41 @@ def fetch_jobs(
     jobs: list[Job] = []
 
     for page in range(1, pages + 1):
-        payload = client.search(
-            country=country,
-            page=page,
-            results_per_page=results_per_page,
-            what=query,
-            where=where,
-            remote=remote,
-            max_days_old=max_days_old,
-        )
+        try:
+            payload = client.search(
+                country=country,
+                page=page,
+                results_per_page=results_per_page,
+                what=query,
+                where=where,
+                remote=remote,
+                max_days_old=max_days_old,
+            )
+        except requests.RequestException as exc:
+            print(f"Warning: Adzuna page {page} fetch failed: {exc}")
+            time.sleep(rate_limit_s)
+            continue
+        except ValueError as exc:
+            print(f"Warning: Adzuna page {page} returned invalid JSON: {exc}")
+            time.sleep(rate_limit_s)
+            continue
 
-        for item in payload.get("results", []) or []:
+        if not isinstance(payload, dict):
+            print(f"Warning: Adzuna page {page} returned unexpected payload type: {type(payload).__name__}")
+            time.sleep(rate_limit_s)
+            continue
+
+        results = payload.get("results", []) or []
+        if not isinstance(results, list):
+            print(f"Warning: Adzuna page {page} results payload was not a list.")
+            time.sleep(rate_limit_s)
+            continue
+
+        for item in results:
             if not isinstance(item, dict):
                 continue
             job = normalize_adzuna_result(country, item)
-            # Keep only useful records (must have URL and title)
-            if job.url and job.title:
+            if job.url:
                 jobs.append(job)
 
         time.sleep(rate_limit_s)
@@ -280,7 +312,9 @@ def fetch_jobs(
 
 
 def write_json(path: str, jobs: list[Job]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "count": len(jobs),

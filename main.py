@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from datetime import datetime, timezone
+from urllib.parse import urlparse, urlunparse
 
 from designer import build_carousel, _read_jobs_json as read_jobs_for_design
 from pdf_generator import _read_jobs_json as read_jobs_for_pdf, generate_pdf, update_docs_index, write_latest_alias
@@ -21,13 +23,63 @@ def build_caption(*, pages_pdf_url: str) -> str:
     )
 
 
+def _normalize_pages_base_url(value: str) -> str:
+    raw = (value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/docs"):
+        path = f"{path}/docs" if path else "/docs"
+    return urlunparse(parsed._replace(path=path))
+
+
+def _normalize_pages_pdf_url(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/latest-jobs.pdf") and "/docs/" not in f"{path}/":
+        base_path = path[: -len("/latest-jobs.pdf")]
+        path = f"{base_path}/docs/latest-jobs.pdf" if base_path else "/docs/latest-jobs.pdf"
+    elif not path.endswith(".pdf"):
+        if path.endswith("/docs"):
+            path = f"{path}/latest-jobs.pdf"
+        else:
+            path = f"{path}/docs/latest-jobs.pdf" if path else "/docs/latest-jobs.pdf"
+    return urlunparse(parsed._replace(path=path))
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"Warning: invalid integer for {name}={raw!r}; using {default}.")
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"Warning: invalid float for {name}={raw!r}; using {default}.")
+        return default
+
+
 def ensure_pages_url() -> str:
     """
     Stable URL to docs/latest-jobs.pdf. Prefer env override in Actions.
     """
     v = os.getenv("GITHUB_PAGES_PDF_URL", "").strip()
     if v:
-        return v
+        return _normalize_pages_pdf_url(v)
     repo = os.getenv("GITHUB_REPOSITORY", "").strip()  # owner/repo (available on Actions)
     if repo and "/" in repo:
         owner, name = repo.split("/", 1)
@@ -48,7 +100,7 @@ def ensure_pages_base_url() -> str:
     """
     v = os.getenv("GITHUB_PAGES_BASE_URL", "").strip()
     if v:
-        return v.rstrip("/")
+        return _normalize_pages_base_url(v)
     repo = os.getenv("GITHUB_REPOSITORY", "").strip()
     if repo and "/" in repo:
         owner, name = repo.split("/", 1)
@@ -106,9 +158,23 @@ def export_instagram_slides_to_docs_assets(
         src = os.path.join(carousel_dir, f)
         out_name = f"slide_{i:02d}.jpg"
         dst = os.path.join(docs_assets_dir, out_name)
-        im = Image.open(src).convert("RGB")
-        im.save(dst, format="JPEG", quality=92, optimize=True, progressive=True)
+        try:
+            with Image.open(src) as im:
+                im.convert("RGB").save(dst, format="JPEG", quality=92, optimize=True, progressive=True)
+        except Exception as exc:
+            print(f"Warning: failed to export slide to docs/assets ({src}): {exc}")
+            continue
         out_names.append(out_name)
+    if not out_names:
+        raise RuntimeError(f"No slide JPGs could be exported from {carousel_dir}")
+    while len(out_names) < 2:
+        duplicate_name = f"slide_{len(out_names) + 1:02d}.jpg"
+        shutil.copyfile(
+            os.path.join(docs_assets_dir, out_names[0]),
+            os.path.join(docs_assets_dir, duplicate_name),
+        )
+        print(f"Warning: duplicated {out_names[0]} as {duplicate_name} to preserve a valid Instagram carousel.")
+        out_names.append(duplicate_name)
 
     manifest = {"generated_at": datetime.now(timezone.utc).isoformat(), "slides": out_names}
     with open(os.path.join(docs_assets_dir, "manifest.json"), "w", encoding="utf-8") as fp:
@@ -152,28 +218,40 @@ def run_youtube_video(*, jobs_json: str, carousel_dir: str) -> tuple[str, str]:
     out_dir = os.path.join("assets", "videos", ts)
     os.makedirs(out_dir, exist_ok=True)
 
-    slides = _list_slide_images(carousel_dir)
+    try:
+        slides = _list_slide_images(carousel_dir)
+    except Exception as exc:
+        print(f"Warning: video generation skipped because slides were unavailable: {exc}")
+        return "", ""
 
     # voiceover
     voice_path = os.path.join(out_dir, "voiceover.mp3")
     script = build_voiceover_script(jobs, pages_url=pages_url)
     voice = os.getenv("EDGE_TTS_VOICE", "en-US-JennyNeural").strip() or "en-US-JennyNeural"
-    asyncio.run(edge_tts_to_file(text=script, out_path=voice_path, voice=voice))
+    try:
+        asyncio.run(edge_tts_to_file(text=script, out_path=voice_path, voice=voice))
+    except Exception as exc:
+        print(f"Warning: voiceover generation failed; continuing without audio: {exc}")
+        voice_path = ""
 
     # thumbnail
     thumb_path = os.path.join(out_dir, "thumbnail.png")
-    make_thumbnail(jobs=jobs, out_path=thumb_path)
+    try:
+        make_thumbnail(jobs=jobs, out_path=thumb_path)
+    except Exception as exc:
+        print(f"Warning: thumbnail generation failed: {exc}")
+        thumb_path = ""
 
     # video
     video_path = os.path.join(out_dir, "shorts.mp4")
-    make_video_from_slides(
+    rendered_video = make_video_from_slides(
         slide_paths=slides,
-        voice_path=voice_path,
+        voice_path=voice_path or None,
         out_path=video_path,
-        duration_s=float(os.getenv("YT_SHORTS_DURATION_S", "60")),
+        duration_s=_env_float("YT_SHORTS_DURATION_S", 60.0),
     )
 
-    return video_path, thumb_path
+    return rendered_video or "", thumb_path
 
 
 def run_full_pipeline(*, country: str, pages: int, results_per_page: int, query: str) -> None:
@@ -192,8 +270,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=normalize_adzuna_country(os.getenv("ADZUNA_COUNTRY")),
         help="Adzuna country code (e.g. in, us, gb). Default: in if missing/blank.",
     )
-    p.add_argument("--pages", type=int, default=int(os.getenv("ADZUNA_PAGES", "2")))
-    p.add_argument("--results-per-page", type=int, default=int(os.getenv("ADZUNA_RESULTS_PER_PAGE", "25")))
+    p.add_argument("--pages", type=int, default=_env_int("ADZUNA_PAGES", 2))
+    p.add_argument("--results-per-page", type=int, default=_env_int("ADZUNA_RESULTS_PER_PAGE", 25))
     p.add_argument("--query", default=os.getenv("ADZUNA_QUERY", "software engineer"))
     p.add_argument("--upload", action=argparse.BooleanOptionalAction, default=True, help="Disable to run generation only.")
     return p
@@ -249,6 +327,9 @@ def main() -> None:
 
     if args.mode == "youtube":
         video_path, thumb_path = run_youtube_video(jobs_json=jobs_json, carousel_dir=carousel_dir)
+        if not video_path:
+            print("YouTube generation skipped video output; continuing workflow without upload.")
+            return
         if not args.upload:
             print("YouTube mode: generation complete (upload disabled).")
             print(video_path)
@@ -288,10 +369,9 @@ if __name__ == "__main__":
             pass
         run_full_pipeline(
             country=normalize_adzuna_country(os.getenv("ADZUNA_COUNTRY")),
-            pages=int(os.getenv("ADZUNA_PAGES", "2")),
-            results_per_page=int(os.getenv("ADZUNA_RESULTS_PER_PAGE", "25")),
+            pages=_env_int("ADZUNA_PAGES", 2),
+            results_per_page=_env_int("ADZUNA_RESULTS_PER_PAGE", 25),
             query=os.getenv("ADZUNA_QUERY", "software engineer"),
         )
     else:
         main()
-

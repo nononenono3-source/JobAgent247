@@ -29,7 +29,14 @@ _TEXT_REPLACEMENTS = str.maketrans(
         "\u00a0": " ",
     }
 )
-_MAX_UNBROKEN_CHARS = 60
+_MAX_UNBROKEN_CHARS = 55
+
+
+def _safe_text(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
 
 
 @dataclass(frozen=True)
@@ -51,26 +58,26 @@ class Job:
 def _read_jobs_json(path: str) -> tuple[str, list[Job]]:
     with open(path, "r", encoding="utf-8") as f:
         payload = json.load(f)
-    generated_at = str(payload.get("generated_at", "")).strip()
-    jobs_raw = payload.get("jobs", payload)
+    generated_at = str(payload.get("generated_at", "")).strip() if isinstance(payload, dict) else ""
+    jobs_raw = payload.get("jobs", payload) if isinstance(payload, dict) else payload
     jobs: list[Job] = []
-    for item in jobs_raw:
+    for item in jobs_raw if isinstance(jobs_raw, list) else []:
         if not isinstance(item, dict):
             continue
         jobs.append(
             Job(
-                category=item.get("category", "uncategorized"),
-                title=str(item.get("title", "")).strip(),
-                company=str(item.get("company", "")).strip(),
-                location=str(item.get("location", "")).strip(),
+                category=_safe_text(item.get("category"), "uncategorized"),
+                title=_safe_text(item.get("title")),
+                company=_safe_text(item.get("company")),
+                location=_safe_text(item.get("location")),
                 is_remote=bool(item.get("is_remote", False)),
                 salary_min=item.get("salary_min"),
                 salary_max=item.get("salary_max"),
                 salary_currency=item.get("salary_currency"),
-                url=str(item.get("url", "")).strip(),
-                description=str(item.get("description", "")).strip(),
-                source=str(item.get("source", "")).strip(),
-                country=str(item.get("country", "")).strip(),
+                url=_safe_text(item.get("url")),
+                description=_safe_text(item.get("description")),
+                source=_safe_text(item.get("source")),
+                country=_safe_text(item.get("country")),
             )
         )
     return generated_at, jobs
@@ -130,7 +137,9 @@ class JobsPDF(FPDF):
 
 
 def generate_pdf(*, generated_at: str, jobs: list[Job], out_path: str) -> None:
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
 
     pdf = JobsPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=14)

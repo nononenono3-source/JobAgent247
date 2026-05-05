@@ -14,6 +14,13 @@ from PIL import Image, ImageDraw, ImageFont
 Category = Literal["fresher", "pro", "uncategorized"]
 
 
+def _safe_text(value: object, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
+
+
 @dataclass(frozen=True)
 class Job:
     category: Category
@@ -33,26 +40,26 @@ class Job:
 def _read_jobs_json(path: str) -> tuple[str, list[Job]]:
     with open(path, "r", encoding="utf-8") as f:
         payload = json.load(f)
-    generated_at = str(payload.get("generated_at", "")).strip()
-    jobs_raw = payload.get("jobs", payload)
+    generated_at = str(payload.get("generated_at", "")).strip() if isinstance(payload, dict) else ""
+    jobs_raw = payload.get("jobs", payload) if isinstance(payload, dict) else payload
     jobs: list[Job] = []
-    for item in jobs_raw:
+    for item in jobs_raw if isinstance(jobs_raw, list) else []:
         if not isinstance(item, dict):
             continue
         jobs.append(
             Job(
-                category=item.get("category", "uncategorized"),
-                title=str(item.get("title", "")).strip(),
-                company=str(item.get("company", "")).strip(),
-                location=str(item.get("location", "")).strip(),
+                category=_safe_text(item.get("category"), "uncategorized"),
+                title=_safe_text(item.get("title")),
+                company=_safe_text(item.get("company")),
+                location=_safe_text(item.get("location")),
                 is_remote=bool(item.get("is_remote", False)),
                 salary_min=item.get("salary_min"),
                 salary_max=item.get("salary_max"),
                 salary_currency=item.get("salary_currency"),
-                url=str(item.get("url", "")).strip(),
-                description=str(item.get("description", "")).strip(),
-                source=str(item.get("source", "")).strip(),
-                country=str(item.get("country", "")).strip(),
+                url=_safe_text(item.get("url")),
+                description=_safe_text(item.get("description")),
+                source=_safe_text(item.get("source")),
+                country=_safe_text(item.get("country")),
             )
         )
     return generated_at, jobs
@@ -133,6 +140,10 @@ def _top_jobs_for_script(jobs: list[Job], n: int = 5) -> list[Job]:
     return sorted(jobs, key=score, reverse=True)[:n]
 
 
+def _warn(message: str) -> None:
+    print(f"Warning: {message}")
+
+
 def build_voiceover_script(jobs: list[Job], *, pages_url: str) -> str:
     top = _top_jobs_for_script(jobs, n=5)
     lines: list[str] = [
@@ -158,7 +169,9 @@ def build_voiceover_script(jobs: list[Job], *, pages_url: str) -> str:
 async def edge_tts_to_file(*, text: str, out_path: str, voice: str = "en-US-JennyNeural", rate: str = "+0%") -> None:
     import edge_tts  # lazy import
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
     await communicate.save(out_path)
 
@@ -169,7 +182,9 @@ def make_thumbnail(
     out_path: str,
     title: str = "HIRING NOW",
 ) -> str:
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     img = Image.new("RGB", (1280, 720), (8, 12, 26))
     draw = ImageDraw.Draw(img)
 
@@ -222,41 +237,63 @@ def make_thumbnail(
 def make_video_from_slides(
     *,
     slide_paths: list[str],
-    voice_path: str,
+    voice_path: Optional[str],
     out_path: str,
     duration_s: float = 60.0,
     fps: int = 30,
-) -> str:
+) -> Optional[str]:
     # Lazy imports: MoviePy is heavy
-    from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
-    from moviepy.audio.AudioClip import AudioClip
-    import numpy as np
+    try:
+        from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
+        from moviepy.audio.AudioClip import AudioClip, concatenate_audioclips
+        import numpy as np
+    except Exception as exc:
+        _warn(f"MoviePy/FFmpeg dependencies unavailable; skipping video render: {exc}")
+        return None
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if not slide_paths:
+        _warn("No slides were available for video rendering.")
+        return None
+
     per = max(1.5, duration_s / max(1, len(slide_paths)))
-    clips = [ImageClip(p).set_duration(per).resize((1080, 1920)) for p in slide_paths]
+    clips = []
+    for path in slide_paths:
+        try:
+            clips.append(ImageClip(path).set_duration(per).resize((1080, 1920)))
+        except Exception as exc:
+            _warn(f"Skipping unreadable slide for video render ({path}): {exc}")
+    if not clips:
+        _warn("All slide inputs failed to load; skipping video render.")
+        return None
 
     # Vertical short: pad/crop slides to 9:16 by centering on a blurred background
     # Simpler zero-cost approach: just fit (can letterbox)
-    base = concatenate_videoclips(clips, method="compose").set_duration(duration_s)
+    base = None
+    audio = None
+    audio_final = None
 
-    # Audio
-    audio = AudioFileClip(voice_path)
-    if audio.duration >= duration_s:
-        audio_final = audio.subclip(0, duration_s)
-    else:
-        silence_dur = duration_s - audio.duration
-
-        def make_silence(t: float) -> np.ndarray:
-            return np.zeros((1,), dtype=np.float32)
-
-        silence = AudioClip(make_silence, duration=silence_dur, fps=44100)
-        from moviepy.audio.AudioClip import concatenate_audioclips
-
-        audio_final = concatenate_audioclips([audio, silence])
-
-    final = base.set_audio(audio_final)
     try:
+        base = concatenate_videoclips(clips, method="compose").set_duration(duration_s)
+        # Audio is optional; render silent video if TTS failed upstream.
+        if voice_path and os.path.exists(voice_path):
+            audio = AudioFileClip(voice_path)
+            if audio.duration >= duration_s:
+                audio_final = audio.subclip(0, duration_s)
+            else:
+                silence_dur = duration_s - audio.duration
+
+                def make_silence(t: float) -> np.ndarray:
+                    return np.zeros((1,), dtype=np.float32)
+
+                silence = AudioClip(make_silence, duration=silence_dur, fps=44100)
+                audio_final = concatenate_audioclips([audio, silence])
+        else:
+            _warn("Voiceover file missing; rendering silent video instead.")
+
+        final = base.set_audio(audio_final) if audio_final is not None else base
         final.write_videofile(
             out_path,
             fps=fps,
@@ -266,10 +303,26 @@ def make_video_from_slides(
             threads=2,
         )
     except Exception as exc:
-        raise RuntimeError(
-            "Video rendering failed. Check ffmpeg/libx264 availability in the runtime: "
-            f"{exc}"
-        ) from exc
+        _warn(f"Video rendering failed; continuing without Shorts output: {exc}")
+        return None
+    finally:
+        for clip in clips:
+            try:
+                clip.close()
+            except Exception:
+                pass
+        for asset in [audio_final, audio, base]:
+            try:
+                if asset is not None:
+                    asset.close()
+            except Exception:
+                pass
+        try:
+            if "final" in locals():
+                final.close()
+        except Exception:
+            pass
+
     return out_path
 
 
@@ -291,24 +344,36 @@ def main() -> None:
     out_dir = args.out_dir or os.path.join("assets", "videos", ts)
     os.makedirs(out_dir, exist_ok=True)
 
-    carousel_dir = args.carousel_dir or _latest_carousel_dir()
-    slides = _list_slide_images(carousel_dir)
+    try:
+        carousel_dir = args.carousel_dir or _latest_carousel_dir()
+        slides = _list_slide_images(carousel_dir)
+    except Exception as exc:
+        _warn(f"Video generation skipped because slides were unavailable: {exc}")
+        slides = []
 
     pages_url = args.pages_url or "https://[your-username].github.io/[repo-name]/docs/latest-jobs.pdf"
     script = build_voiceover_script(jobs, pages_url=pages_url)
 
     voice_path = os.path.join(out_dir, "voiceover.mp3")
-    asyncio.run(edge_tts_to_file(text=script, out_path=voice_path, voice=args.voice))
+    try:
+        asyncio.run(edge_tts_to_file(text=script, out_path=voice_path, voice=args.voice))
+    except Exception as exc:
+        _warn(f"Voiceover generation failed; proceeding without audio: {exc}")
+        voice_path = ""
 
     thumb_path = os.path.join(out_dir, "thumbnail.png")
-    make_thumbnail(jobs=jobs, out_path=thumb_path)
+    try:
+        make_thumbnail(jobs=jobs, out_path=thumb_path)
+    except Exception as exc:
+        _warn(f"Thumbnail generation failed: {exc}")
+        thumb_path = ""
 
     video_path = os.path.join(out_dir, "shorts.mp4")
-    make_video_from_slides(slide_paths=slides, voice_path=voice_path, out_path=video_path, duration_s=60.0)
+    rendered_video = make_video_from_slides(slide_paths=slides, voice_path=voice_path or None, out_path=video_path, duration_s=60.0)
 
-    print(f"Video: {video_path}")
-    print(f"Thumbnail: {thumb_path}")
-    print(f"Voiceover: {voice_path}")
+    print(f"Video: {rendered_video or 'skipped'}")
+    print(f"Thumbnail: {thumb_path or 'skipped'}")
+    print(f"Voiceover: {voice_path or 'skipped'}")
 
 
 if __name__ == "__main__":
