@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from datetime import datetime, timezone
 
 from designer import build_carousel, _read_jobs_json as read_jobs_for_design
@@ -27,18 +28,36 @@ def ensure_pages_url() -> str:
     v = os.getenv("GITHUB_PAGES_PDF_URL", "").strip()
     if v:
         return v
-    return "https://[your-username].github.io/[repo-name]/docs/latest-jobs.pdf"
+    repo = os.getenv("GITHUB_REPOSITORY", "").strip()  # owner/repo (available on Actions)
+    if repo and "/" in repo:
+        owner, name = repo.split("/", 1)
+        return f"https://{owner}.github.io/{name}/docs/latest-jobs.pdf"
+    owner = os.getenv("GITHUB_OWNER", "").strip()
+    name = os.getenv("GITHUB_REPO", "").strip()
+    if owner and name:
+        return f"https://{owner}.github.io/{name}/docs/latest-jobs.pdf"
+    return "https://YOUR_USERNAME.github.io/YOUR_REPO/docs/latest-jobs.pdf"
 
 
 def ensure_pages_base_url() -> str:
     """
     Base URL where your GitHub Pages site is served.
-    Example: https://<user>.github.io/<repo>
+    For this repo deployment layout (upload-pages-artifact path: .), social assets
+    are under /docs/assets, so base should include /docs.
+    Example: https://<user>.github.io/<repo>/docs
     """
     v = os.getenv("GITHUB_PAGES_BASE_URL", "").strip()
     if v:
         return v.rstrip("/")
-    return "https://[your-username].github.io/[repo-name]"
+    repo = os.getenv("GITHUB_REPOSITORY", "").strip()
+    if repo and "/" in repo:
+        owner, name = repo.split("/", 1)
+        return f"https://{owner}.github.io/{name}/docs"
+    owner = os.getenv("GITHUB_OWNER", "").strip()
+    name = os.getenv("GITHUB_REPO", "").strip()
+    if owner and name:
+        return f"https://{owner}.github.io/{name}/docs"
+    return "https://YOUR_USERNAME.github.io/YOUR_REPO/docs"
 
 
 def run_scrape(*, country: str, pages: int, results_per_page: int, query: str) -> str:
@@ -109,36 +128,58 @@ def run_pdf(*, jobs_json: str) -> str:
 
 
 def run_youtube_video(*, jobs_json: str, carousel_dir: str) -> tuple[str, str]:
+    """
+    Generates voiceover, thumbnail, and a 60s Shorts video by calling the same
+    underlying functions used by `video_maker.py`.
+    Returns (video_path, thumbnail_path).
+    """
     from video_maker import (
         _list_slide_images,
+        _read_jobs_json as read_jobs_for_video,
         build_voiceover_script,
         edge_tts_to_file,
         make_thumbnail,
         make_video_from_slides,
-        _read_jobs_json,
     )
+
     import asyncio
 
     pages_url = ensure_pages_url()
-    _, jobs = _read_jobs_json(jobs_json)
+    _, jobs = read_jobs_for_video(jobs_json)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out_dir = os.path.join("assets", "videos", ts)
     os.makedirs(out_dir, exist_ok=True)
 
     slides = _list_slide_images(carousel_dir)
+
+    # voiceover
     voice_path = os.path.join(out_dir, "voiceover.mp3")
     script = build_voiceover_script(jobs, pages_url=pages_url)
     voice = os.getenv("EDGE_TTS_VOICE", "en-US-JennyNeural").strip() or "en-US-JennyNeural"
     asyncio.run(edge_tts_to_file(text=script, out_path=voice_path, voice=voice))
 
+    # thumbnail
     thumb_path = os.path.join(out_dir, "thumbnail.png")
     make_thumbnail(jobs=jobs, out_path=thumb_path)
 
+    # video
     video_path = os.path.join(out_dir, "shorts.mp4")
-    make_video_from_slides(slide_paths=slides, voice_path=voice_path, out_path=video_path, duration_s=60.0)
+    make_video_from_slides(
+        slide_paths=slides,
+        voice_path=voice_path,
+        out_path=video_path,
+        duration_s=float(os.getenv("YT_SHORTS_DURATION_S", "60")),
+    )
 
     return video_path, thumb_path
+
+
+def run_full_pipeline(*, country: str, pages: int, results_per_page: int, query: str) -> None:
+    jobs_json = run_scrape(country=country, pages=pages, results_per_page=results_per_page, query=query)
+    carousel_dir = run_carousel(jobs_json=jobs_json)
+    run_pdf(jobs_json=jobs_json)
+    export_instagram_slides_to_docs_assets(carousel_dir=carousel_dir)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -153,6 +194,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # Load .env for local testing
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except Exception:
+        pass
+
     args = build_arg_parser().parse_args()
     pages_url = ensure_pages_url()
     pages_base = ensure_pages_base_url()
@@ -222,5 +271,21 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # If run without CLI args, execute the full generation pipeline (no uploads).
+    # If run with args, use the orchestrator CLI.
+    if len(sys.argv) == 1:
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv()
+        except Exception:
+            pass
+        run_full_pipeline(
+            country=os.getenv("ADZUNA_COUNTRY", "in"),
+            pages=int(os.getenv("ADZUNA_PAGES", "2")),
+            results_per_page=int(os.getenv("ADZUNA_RESULTS_PER_PAGE", "25")),
+            query=os.getenv("ADZUNA_QUERY", "software engineer"),
+        )
+    else:
+        main()
 

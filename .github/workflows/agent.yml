@@ -22,6 +22,8 @@ concurrency:
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
+    outputs:
+      head_sha: ${{ steps.capture_sha.outputs.head_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -87,6 +89,10 @@ jobs:
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "chore(docs): update jobs assets"
           git push
 
+      - name: Capture head SHA for downstream job
+        id: capture_sha
+        run: echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Upload Pages artifact (repo root, keeps /docs in URL)
         uses: actions/upload-pages-artifact@v3
         with:
@@ -103,6 +109,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build_and_deploy.outputs.head_sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -116,6 +124,27 @@ jobs:
 
       - name: Wait for Pages to go live
         run: sleep 60
+
+      - name: Echo resolved Pages URLs from manifest
+        env:
+          GITHUB_PAGES_BASE_URL: ${{ vars.GITHUB_PAGES_BASE_URL }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from main import ensure_pages_base_url, ensure_pages_url
+
+          manifest_path = os.path.join("docs", "assets", "manifest.json")
+          with open(manifest_path, "r", encoding="utf-8") as f:
+              manifest = json.load(f)
+
+          base = ensure_pages_base_url().rstrip("/")
+          slides = manifest.get("slides", [])
+          print(f"PDF URL: {ensure_pages_url()}")
+          print("Slide URLs to be posted:")
+          for name in slides:
+              print(f"{base}/assets/{name}")
+          PY
 
       - name: Post Instagram carousel (from GitHub Pages URLs)
         env:

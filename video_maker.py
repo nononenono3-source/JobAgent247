@@ -256,7 +256,20 @@ def make_video_from_slides(
         audio_final = concatenate_audioclips([audio, silence])
 
     final = base.set_audio(audio_final)
-    final.write_videofile(out_path, fps=fps, codec="libx264", audio_codec="aac", preset="medium", threads=2)
+    try:
+        final.write_videofile(
+            out_path,
+            fps=fps,
+            codec="libx264",
+            audio_codec="aac",
+            preset="medium",
+            threads=2,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Video rendering failed. Check ffmpeg/libx264 availability in the runtime: "
+            f"{exc}"
+        ) from exc
     return out_path
 
 

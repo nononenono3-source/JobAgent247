@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+client_secret.json
 data/*.json
 data/*.ndjson
 data/*.csv
