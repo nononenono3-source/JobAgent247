@@ -217,10 +217,10 @@ def _safe_float(value: Any) -> Optional[float]:
 
 
 def normalize_adzuna_result(country: str, item: dict[str, Any]) -> Job:
-    title = _safe_text(item.get("title"), "Untitled")
+    title = _safe_text(item.get("title"), "No title provided")
     company = _safe_get(item, ["company", "display_name"], default="").strip() or "Unknown"
     location = _safe_get(item, ["location", "display_name"], default="").strip() or "Unknown"
-    description = _safe_text(item.get("description"), "Description not provided.")
+    description = _safe_text(item.get("description"), "No description provided")
     url = _safe_text(item.get("redirect_url") or item.get("adref"))
 
     salary_min = _safe_float(item.get("salary_min"))
@@ -232,7 +232,7 @@ def normalize_adzuna_result(country: str, item: dict[str, Any]) -> Job:
 
     return Job(
         category=category,
-        title=title or "Untitled",
+        title=title or "No title provided",
         company=company,
         location=location,
         is_remote=is_remote,

@@ -48,7 +48,7 @@ def _read_jobs_json(path: str) -> list[Job]:
         jobs.append(
             Job(
                 category=_safe_text(item.get("category"), "uncategorized"),
-                title=_safe_text(item.get("title")),
+                title=_safe_text(item.get("title"), "No title provided"),
                 company=_safe_text(item.get("company")),
                 location=_safe_text(item.get("location")),
                 is_remote=bool(item.get("is_remote", False)),
@@ -56,7 +56,7 @@ def _read_jobs_json(path: str) -> list[Job]:
                 salary_max=item.get("salary_max"),
                 salary_currency=item.get("salary_currency"),
                 url=_safe_text(item.get("url")),
-                description=_safe_text(item.get("description")),
+                description=_safe_text(item.get("description"), "No description provided"),
                 source=_safe_text(item.get("source")),
                 country=_safe_text(item.get("country")),
             )
