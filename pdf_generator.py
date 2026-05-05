@@ -29,7 +29,7 @@ _TEXT_REPLACEMENTS = str.maketrans(
         "\u00a0": " ",
     }
 )
-_MAX_UNBROKEN_CHARS = 80
+_MAX_UNBROKEN_CHARS = 60
 
 
 @dataclass(frozen=True)
