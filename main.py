@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from designer import build_carousel, _read_jobs_json as read_jobs_for_design
 from pdf_generator import _read_jobs_json as read_jobs_for_pdf, generate_pdf, update_docs_index, write_latest_alias
-from scraper import fetch_jobs, write_json
+from scraper import fetch_jobs, normalize_adzuna_country, write_json
 
 
 def build_caption(*, pages_pdf_url: str) -> str:
@@ -61,6 +61,7 @@ def ensure_pages_base_url() -> str:
 
 
 def run_scrape(*, country: str, pages: int, results_per_page: int, query: str) -> str:
+    country = normalize_adzuna_country(country)
     jobs = fetch_jobs(
         country=country,
         pages=pages,
@@ -185,7 +186,12 @@ def run_full_pipeline(*, country: str, pages: int, results_per_page: int, query:
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="JobAgent247 Orchestrator")
     p.add_argument("--mode", choices=["instagram", "instagram-upload", "youtube"], required=True)
-    p.add_argument("--country", default=os.getenv("ADZUNA_COUNTRY", "in"))
+    # ADZUNA_COUNTRY can be set but empty (e.g. repo var); getenv default does not apply then.
+    p.add_argument(
+        "--country",
+        default=normalize_adzuna_country(os.getenv("ADZUNA_COUNTRY")),
+        help="Adzuna country code (e.g. in, us, gb). Default: in if missing/blank.",
+    )
     p.add_argument("--pages", type=int, default=int(os.getenv("ADZUNA_PAGES", "2")))
     p.add_argument("--results-per-page", type=int, default=int(os.getenv("ADZUNA_RESULTS_PER_PAGE", "25")))
     p.add_argument("--query", default=os.getenv("ADZUNA_QUERY", "software engineer"))
@@ -281,7 +287,7 @@ if __name__ == "__main__":
         except Exception:
             pass
         run_full_pipeline(
-            country=os.getenv("ADZUNA_COUNTRY", "in"),
+            country=normalize_adzuna_country(os.getenv("ADZUNA_COUNTRY")),
             pages=int(os.getenv("ADZUNA_PAGES", "2")),
             results_per_page=int(os.getenv("ADZUNA_RESULTS_PER_PAGE", "25")),
             query=os.getenv("ADZUNA_QUERY", "software engineer"),

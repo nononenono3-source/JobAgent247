@@ -12,7 +12,20 @@ from typing import Any, Iterable, Literal, Optional
 import requests
 
 
+DEFAULT_ADZUNA_COUNTRY = "in"
+
 Category = Literal["fresher", "pro", "uncategorized"]
+
+
+def normalize_adzuna_country(code: str | None) -> str:
+    """
+    Adzuna paths use /jobs/{country}/search/... Empty or whitespace breaks the URL.
+
+    Env var ADZUNA_COUNTRY can be present but blank (GitHub Variables / dotenv).
+    Using os.getenv("X", default) alone does NOT fall back when X is empty string.
+    """
+    c = (code or "").strip().lower()
+    return c if c else DEFAULT_ADZUNA_COUNTRY
 
 
 @dataclass(frozen=True)
@@ -63,6 +76,7 @@ class AdzunaClient:
         Adzuna Search endpoint:
         https://developer.adzuna.com/activedocs#!/adzuna/search
         """
+        country = normalize_adzuna_country(country)
         base = f"https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
         params: dict[str, Any] = {
             "app_id": self.app_id,
@@ -237,6 +251,7 @@ def fetch_jobs(
             "Missing Adzuna credentials. Set env vars ADZUNA_APP_ID and ADZUNA_APP_KEY."
         )
 
+    country = normalize_adzuna_country(country)
     client = AdzunaClient(app_id=app_id, app_key=app_key)
     jobs: list[Job] = []
 
@@ -301,7 +316,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_arg_parser().parse_args()
     jobs = fetch_jobs(
-        country=args.country,
+        country=normalize_adzuna_country(args.country),
         pages=args.pages,
         results_per_page=args.results_per_page,
         query=args.query,
