@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ _TEXT_REPLACEMENTS = str.maketrans(
         "\u00a0": " ",
     }
 )
+_MAX_UNBROKEN_CHARS = 80
 
 
 @dataclass(frozen=True)
@@ -85,12 +87,28 @@ def _fmt_salary(job: Job) -> str:
     return f"Up to {cur}{int(job.salary_max):,}"
 
 
+def _break_long_tokens(text: str, *, max_chars: int = _MAX_UNBROKEN_CHARS) -> str:
+    """
+    Insert spaces into oversized non-whitespace tokens so FPDF can wrap them.
+    """
+    parts = re.split(r"(\s+)", text)
+    wrapped: list[str] = []
+    for part in parts:
+        if not part or part.isspace() or len(part) <= max_chars:
+            wrapped.append(part)
+            continue
+        wrapped.append(" ".join(part[i : i + max_chars] for i in range(0, len(part), max_chars)))
+    return "".join(wrapped)
+
+
 def clean_text(value: Any) -> str:
     """
-    Normalize common Unicode punctuation from job feeds into ASCII-safe text for FPDF.
+    Normalize common Unicode punctuation from job feeds into ASCII-safe text for FPDF
+    and force wrap opportunities into very long unbroken strings.
     """
     text = str(value or "")
     text = text.translate(_TEXT_REPLACEMENTS)
+    text = _break_long_tokens(text)
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
