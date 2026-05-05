@@ -15,6 +15,21 @@ from fpdf import FPDF
 Category = Literal["fresher", "pro", "uncategorized"]
 
 
+_TEXT_REPLACEMENTS = str.maketrans(
+    {
+        "\u2022": "-",
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2026": "...",
+        "\u00a0": " ",
+    }
+)
+
+
 @dataclass(frozen=True)
 class Job:
     category: Category
@@ -70,11 +85,20 @@ def _fmt_salary(job: Job) -> str:
     return f"Up to {cur}{int(job.salary_max):,}"
 
 
+def clean_text(value: Any) -> str:
+    """
+    Normalize common Unicode punctuation from job feeds into ASCII-safe text for FPDF.
+    """
+    text = str(value or "")
+    text = text.translate(_TEXT_REPLACEMENTS)
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
 class JobsPDF(FPDF):
     def header(self) -> None:
         self.set_font("Helvetica", "B", 14)
         self.set_text_color(20, 24, 40)
-        self.cell(0, 10, "JobAgent247 • Daily Job Digest", new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 10, clean_text("JobAgent247 - Daily Job Digest"), new_x="LMARGIN", new_y="NEXT")
         self.ln(1)
         self.set_draw_color(220, 225, 240)
         self.line(10, self.get_y(), 200, self.get_y())
@@ -84,7 +108,7 @@ class JobsPDF(FPDF):
         self.set_y(-14)
         self.set_font("Helvetica", "", 10)
         self.set_text_color(100, 110, 140)
-        self.cell(0, 10, f"Page {self.page_no()}", align="C")
+        self.cell(0, 10, clean_text(f"Page {self.page_no()}"), align="C")
 
 
 def generate_pdf(*, generated_at: str, jobs: list[Job], out_path: str) -> None:
@@ -97,7 +121,7 @@ def generate_pdf(*, generated_at: str, jobs: list[Job], out_path: str) -> None:
     pdf.set_font("Helvetica", "", 12)
     pdf.set_text_color(40, 44, 60)
     stamp = generated_at or datetime.now(timezone.utc).isoformat()
-    pdf.multi_cell(0, 6, f"Generated at (UTC): {stamp}")
+    pdf.multi_cell(0, 6, clean_text(f"Generated at (UTC): {stamp}"))
     pdf.ln(3)
 
     # Summary counts
@@ -110,14 +134,14 @@ def generate_pdf(*, generated_at: str, jobs: list[Job], out_path: str) -> None:
     pdf.multi_cell(
         0,
         7,
-        f"Jobs: {len(jobs)}   •   Freshers: {by_cat['fresher']}   •   Pros: {by_cat['pro']}",
+        clean_text(f"Jobs: {len(jobs)}   -   Freshers: {by_cat['fresher']}   -   Pros: {by_cat['pro']}"),
     )
     pdf.ln(2)
 
     for i, job in enumerate(jobs, start=1):
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(15, 23, 42)
-        pdf.multi_cell(0, 7, f"{i}. {job.title or 'Untitled'}")
+        pdf.multi_cell(0, 7, clean_text(f"{i}. {job.title or 'Untitled'}"))
 
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(60, 70, 95)
@@ -130,16 +154,16 @@ def generate_pdf(*, generated_at: str, jobs: list[Job], out_path: str) -> None:
             f"URL: {job.url or 'N/A'}",
         ]
         for m in meta:
-            pdf.multi_cell(0, 6, m)
+            pdf.multi_cell(0, 6, clean_text(m))
 
         pdf.ln(1)
         pdf.set_font("Helvetica", "B", 11)
         pdf.set_text_color(15, 23, 42)
-        pdf.multi_cell(0, 6, "Description:")
+        pdf.multi_cell(0, 6, clean_text("Description:"))
 
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(35, 40, 55)
-        desc = " ".join((job.description or "").split())
+        desc = clean_text(" ".join((job.description or "").split()))
         pdf.multi_cell(0, 5.5, desc if desc else "N/A")
 
         pdf.ln(6)
