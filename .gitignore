@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/*.json
+data/*.ndjson
+data/*.csv
+*.mp4
+*.png
+*.jpg
+*.jpeg
+*.webm
+*.pdf
+
+# Allow GitHub Pages artifacts under docs/
+!docs/**/*.pdf
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.jpeg
+!docs/**/*.webm
+!docs/index.html

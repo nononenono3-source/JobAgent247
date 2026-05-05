@@ -1,0 +1,128 @@
+name: JobAgent247
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Instagram: every hour
+    - cron: "0 * * * *"
+    # YouTube: 8:00 AM IST (02:30 UTC)
+    - cron: "30 2 * * *"
+    # YouTube: 9:00 PM IST (15:30 UTC)
+    - cron: "30 15 * * *"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "jobagent247"
+  cancel-in-progress: false
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Decide mode
+        id: mode
+        run: |
+          echo "schedule=${{ github.event.schedule }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event.schedule }}" = "0 * * * *" ]; then
+            echo "mode=instagram" >> $GITHUB_OUTPUT
+          else
+            echo "mode=youtube" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run generator (creates docs assets/PDF)
+        env:
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+
+          # Optional overrides
+          ADZUNA_COUNTRY: ${{ vars.ADZUNA_COUNTRY }}
+          ADZUNA_QUERY: ${{ vars.ADZUNA_QUERY }}
+
+          # Stable PDF link (optional; used in descriptions)
+          GITHUB_PAGES_PDF_URL: ${{ vars.GITHUB_PAGES_PDF_URL }}
+          # Base site URL (recommended to set this var)
+          GITHUB_PAGES_BASE_URL: ${{ vars.GITHUB_PAGES_BASE_URL }}
+
+          # edge-tts voice (optional)
+          EDGE_TTS_VOICE: ${{ vars.EDGE_TTS_VOICE }}
+
+          # YouTube OAuth (only required for youtube mode + upload)
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_PRIVACY: ${{ vars.YT_PRIVACY }}
+          YT_TITLE: ${{ vars.YT_TITLE }}
+
+          # Instagram (used in instagram-upload job after Pages deploy)
+          INSTAGRAM_TOKEN: ${{ secrets.INSTAGRAM_TOKEN }}
+          INSTAGRAM_IG_USER_ID: ${{ secrets.INSTAGRAM_IG_USER_ID }}
+        run: |
+          python main.py --mode "${{ steps.mode.outputs.mode }}"
+
+      - name: Commit docs assets (optional, for permanence)
+        run: |
+          git status --porcelain
+          git add docs || true
+          if git diff --cached --quiet; then
+            echo "No docs changes to commit."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "chore(docs): update jobs assets"
+          git push
+
+      - name: Upload Pages artifact (repo root, keeps /docs in URL)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  instagram_upload:
+    if: github.event.schedule == '0 * * * *'
+    needs: build_and_deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for Pages to go live
+        run: sleep 60
+
+      - name: Post Instagram carousel (from GitHub Pages URLs)
+        env:
+          INSTAGRAM_TOKEN: ${{ secrets.INSTAGRAM_TOKEN }}
+          INSTAGRAM_IG_USER_ID: ${{ secrets.INSTAGRAM_IG_USER_ID }}
+          GITHUB_PAGES_BASE_URL: ${{ vars.GITHUB_PAGES_BASE_URL }}
+          GITHUB_PAGES_PDF_URL: ${{ vars.GITHUB_PAGES_PDF_URL }}
+        run: |
+          python main.py --mode instagram-upload
+
