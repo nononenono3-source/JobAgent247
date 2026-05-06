@@ -12,6 +12,7 @@ data/*.csv
 *.jpeg
 *.webm
 *.pdf
+pipeline.log
 
 # Allow GitHub Pages artifacts under docs/
 !docs/**/*.pdf
@@ -20,3 +21,4 @@ data/*.csv
 !docs/**/*.jpeg
 !docs/**/*.webm
 !docs/index.html
+.aider*
