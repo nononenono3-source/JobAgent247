@@ -153,6 +153,7 @@ def export_instagram_slides_to_docs_assets(
     """
     from PIL import Image
 
+    os.makedirs(docs_assets_dir, exist_ok=True)
     safe_path(docs_assets_dir)
     pngs = [f for f in os.listdir(carousel_dir) if f.lower().endswith(".png") and f.startswith("slide_")]
     pngs.sort()
