@@ -11,10 +11,14 @@ from typing import Any, Iterable, Optional
 
 import requests
 
+from log_utils import get_logger
 from models import Category, Job
 
 
 DEFAULT_ADZUNA_COUNTRY = "in"
+
+
+logger = get_logger("scraper")
 
 
 def normalize_adzuna_country(code: str | None) -> str:
@@ -266,22 +270,22 @@ def fetch_jobs(
                 max_days_old=max_days_old,
             )
         except requests.RequestException as exc:
-            print(f"Warning: Adzuna page {page} fetch failed: {exc}")
+            logger.warning("Adzuna page %s fetch failed: %s", page, exc)
             time.sleep(rate_limit_s)
             continue
         except ValueError as exc:
-            print(f"Warning: Adzuna page {page} returned invalid JSON: {exc}")
+            logger.warning("Adzuna page %s returned invalid JSON: %s", page, exc)
             time.sleep(rate_limit_s)
             continue
 
         if not isinstance(payload, dict):
-            print(f"Warning: Adzuna page {page} returned unexpected payload type: {type(payload).__name__}")
+            logger.warning("Adzuna page %s returned unexpected payload type: %s", page, type(payload).__name__)
             time.sleep(rate_limit_s)
             continue
 
         results = payload.get("results", []) or []
         if not isinstance(results, list):
-            print(f"Warning: Adzuna page {page} results payload was not a list.")
+            logger.warning("Adzuna page %s results payload was not a list.", page)
             time.sleep(rate_limit_s)
             continue
 
@@ -345,7 +349,7 @@ def main() -> None:
         max_days_old=args.max_days_old,
     )
     write_json(args.out, jobs)
-    print(f"Wrote {len(jobs)} jobs to {args.out}")
+    logger.info("Wrote %s jobs to %s", len(jobs), args.out)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,11 @@ from typing import Optional
 
 import requests
 
+from log_utils import get_logger
+
+
+logger = get_logger("uploader")
+
 
 def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
@@ -232,7 +237,7 @@ def upload_youtube_video(
         status, resp = req.next_chunk()
         if status:
             pct = int(status.progress() * 100)
-            print(f"Upload progress: {pct}%")
+            logger.info("Upload progress: %s%%", pct)
 
     vid = str((resp or {}).get("id") or "").strip()
     if not vid:
@@ -242,7 +247,7 @@ def upload_youtube_video(
         try:
             youtube.thumbnails().set(videoId=vid, media_body=MediaFileUpload(thumbnail_path)).execute()
         except Exception as exc:
-            print(f"Warning: thumbnail upload skipped/failed: {exc}")
+            logger.warning("Thumbnail upload skipped/failed: %s", exc)
 
     return vid
 

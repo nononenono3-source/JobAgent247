@@ -9,9 +9,13 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse
 
 from designer import build_carousel
+from log_utils import get_logger
 from models import read_jobs_json
 from pdf_generator import generate_pdf, update_docs_index, write_latest_alias
 from scraper import fetch_jobs, normalize_adzuna_country, write_json
+
+
+logger = get_logger("main")
 
 
 def build_caption(*, pages_pdf_url: str) -> str:
@@ -59,7 +63,7 @@ def _env_int(name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError:
-        print(f"Warning: invalid integer for {name}={raw!r}; using {default}.")
+        logger.warning("Invalid integer for %s=%r; using %s.", name, raw, default)
         return default
 
 
@@ -70,7 +74,7 @@ def _env_float(name: str, default: float) -> float:
     try:
         return float(raw)
     except ValueError:
-        print(f"Warning: invalid float for {name}={raw!r}; using {default}.")
+        logger.warning("Invalid float for %s=%r; using %s.", name, raw, default)
         return default
 
 
@@ -163,7 +167,7 @@ def export_instagram_slides_to_docs_assets(
             with Image.open(src) as im:
                 im.convert("RGB").save(dst, format="JPEG", quality=92, optimize=True, progressive=True)
         except Exception as exc:
-            print(f"Warning: failed to export slide to docs/assets ({src}): {exc}")
+            logger.warning("Failed to export slide to docs/assets (%s): %s", src, exc)
             continue
         out_names.append(out_name)
     if not out_names:
@@ -174,7 +178,7 @@ def export_instagram_slides_to_docs_assets(
             os.path.join(docs_assets_dir, out_names[0]),
             os.path.join(docs_assets_dir, duplicate_name),
         )
-        print(f"Warning: duplicated {out_names[0]} as {duplicate_name} to preserve a valid Instagram carousel.")
+        logger.warning("Duplicated %s as %s to preserve a valid Instagram carousel.", out_names[0], duplicate_name)
         out_names.append(duplicate_name)
 
     manifest = {"generated_at": datetime.now(timezone.utc).isoformat(), "slides": out_names}
@@ -221,7 +225,7 @@ def run_youtube_video(*, jobs_json: str, carousel_dir: str) -> tuple[str, str]:
     try:
         slides = _list_slide_images(carousel_dir)
     except Exception as exc:
-        print(f"Warning: video generation skipped because slides were unavailable: {exc}")
+        logger.warning("Video generation skipped because slides were unavailable: %s", exc)
         return "", ""
 
     # voiceover
@@ -231,7 +235,7 @@ def run_youtube_video(*, jobs_json: str, carousel_dir: str) -> tuple[str, str]:
     try:
         asyncio.run(edge_tts_to_file(text=script, out_path=voice_path, voice=voice))
     except Exception as exc:
-        print(f"Warning: voiceover generation failed; continuing without audio: {exc}")
+        logger.warning("Voiceover generation failed; continuing without audio: %s", exc)
         voice_path = ""
 
     # thumbnail
@@ -239,7 +243,7 @@ def run_youtube_video(*, jobs_json: str, carousel_dir: str) -> tuple[str, str]:
     try:
         make_thumbnail(jobs=jobs, out_path=thumb_path)
     except Exception as exc:
-        print(f"Warning: thumbnail generation failed: {exc}")
+        logger.warning("Thumbnail generation failed: %s", exc)
         thumb_path = ""
 
     # video
@@ -292,7 +296,7 @@ def main() -> None:
 
     if args.mode == "instagram-upload":
         if not args.upload:
-            print("instagram-upload: upload disabled.")
+            logger.info("instagram-upload: upload disabled.")
             return
         manifest_path = os.path.join("docs", "assets", "manifest.json")
         with open(manifest_path, "r", encoding="utf-8") as fp:
@@ -305,7 +309,7 @@ def main() -> None:
 
         caption = build_caption(pages_pdf_url=pages_url)
         ig_id = post_instagram_carousel_from_pages_assets(slide_filenames=slides, caption=caption)
-        print(f"Instagram published media id: {ig_id}")
+        logger.info("Instagram published media id: %s", ig_id)
         return
 
     jobs_json = run_scrape(
@@ -320,19 +324,19 @@ def main() -> None:
 
     if args.mode == "instagram":
         if not args.upload:
-            print("Instagram mode: generation complete (upload disabled).")
+            logger.info("Instagram mode: generation complete (upload disabled).")
             return
-        print("Instagram generation complete. Run `--mode instagram-upload` after GitHub Pages deploy.")
+        logger.info("Instagram generation complete. Run `--mode instagram-upload` after GitHub Pages deploy.")
         return
 
     if args.mode == "youtube":
         video_path, thumb_path = run_youtube_video(jobs_json=jobs_json, carousel_dir=carousel_dir)
         if not video_path:
-            print("YouTube generation skipped video output; continuing workflow without upload.")
+            logger.warning("YouTube generation skipped video output; continuing workflow without upload.")
             return
         if not args.upload:
-            print("YouTube mode: generation complete (upload disabled).")
-            print(video_path)
+            logger.info("YouTube mode: generation complete (upload disabled).")
+            logger.info("Video path: %s", video_path)
             return
         try:
             from uploader import upload_youtube_video
@@ -351,9 +355,9 @@ def main() -> None:
                 privacy_status=os.getenv("YT_PRIVACY", "public"),
                 thumbnail_path=thumb_path,
             )
-            print(f"Uploaded YouTube videoId: {vid}")
-        except Exception as e:
-            print(f"YouTube upload skipped/failed: {e}")
+            logger.info("Uploaded YouTube videoId: %s", vid)
+        except Exception:
+            logger.exception("YouTube upload skipped/failed.")
         return
 
 

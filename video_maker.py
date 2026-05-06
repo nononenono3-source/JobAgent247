@@ -8,7 +8,11 @@ from typing import Literal, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
+from log_utils import get_logger
 from models import Category, Job, read_jobs_json
+
+
+logger = get_logger("video_maker")
 
 
 def _pick_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -87,7 +91,7 @@ def _top_jobs_for_script(jobs: list[Job], n: int = 5) -> list[Job]:
 
 
 def _warn(message: str) -> None:
-    print(f"Warning: {message}")
+    logger.warning(message)
 
 
 def build_voiceover_script(jobs: list[Job], *, pages_url: str) -> str:
@@ -317,9 +321,9 @@ def main() -> None:
     video_path = os.path.join(out_dir, "shorts.mp4")
     rendered_video = make_video_from_slides(slide_paths=slides, voice_path=voice_path or None, out_path=video_path, duration_s=60.0)
 
-    print(f"Video: {rendered_video or 'skipped'}")
-    print(f"Thumbnail: {thumb_path or 'skipped'}")
-    print(f"Voiceover: {voice_path or 'skipped'}")
+    logger.info("Video: %s", rendered_video or 'skipped')
+    logger.info("Thumbnail: %s", thumb_path or 'skipped')
+    logger.info("Voiceover: %s", voice_path or 'skipped')
 
 
 if __name__ == "__main__":

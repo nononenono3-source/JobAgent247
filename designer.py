@@ -9,7 +9,11 @@ from typing import Literal
 
 from PIL import Image, ImageDraw, ImageFont
 
+from log_utils import get_logger
 from models import Category, Job, read_jobs_json
+
+
+logger = get_logger("designer")
 
 
 def _pick_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -332,12 +336,12 @@ def build_carousel(
     try:
         slides.append(_hook_slide(size=size, idx=1, total=total, audience="fresher", jobs=fresher))
     except Exception as exc:
-        print(f"Warning: failed to build fresher hook slide: {exc}")
+        logger.warning("Failed to build fresher hook slide: %s", exc)
         slides.append(_fallback_slide(size=size, idx=1, total=total, message="Freshers jobs are temporarily unavailable. Check the PDF for details."))
     try:
         slides.append(_hook_slide(size=size, idx=2, total=total, audience="pro", jobs=pro))
     except Exception as exc:
-        print(f"Warning: failed to build pro hook slide: {exc}")
+        logger.warning("Failed to build pro hook slide: %s", exc)
         slides.append(_fallback_slide(size=size, idx=2, total=total, message="Pro jobs are temporarily unavailable. Check the PDF for details."))
 
     idx = 3
@@ -345,14 +349,14 @@ def build_carousel(
         try:
             slides.append(_job_slide(size=size, idx=idx, total=total, job=j))
         except Exception as exc:
-            print(f"Warning: failed to build fresher slide {idx}: {exc}")
+            logger.warning("Failed to build fresher slide %s: %s", idx, exc)
             slides.append(_fallback_slide(size=size, idx=idx, total=total, message=f"Job slide unavailable for {j.title or 'this role'}. Check the PDF for full details."))
         idx += 1
     for j in pro:
         try:
             slides.append(_job_slide(size=size, idx=idx, total=total, job=j))
         except Exception as exc:
-            print(f"Warning: failed to build pro slide {idx}: {exc}")
+            logger.warning("Failed to build pro slide %s: %s", idx, exc)
             slides.append(_fallback_slide(size=size, idx=idx, total=total, message=f"Job slide unavailable for {j.title or 'this role'}. Check the PDF for full details."))
         idx += 1
 
@@ -363,7 +367,7 @@ def build_carousel(
         try:
             img.save(p, format="PNG", optimize=True)
         except Exception as exc:
-            print(f"Warning: failed to save slide {i}: {exc}")
+            logger.warning("Failed to save slide %s: %s", i, exc)
             fallback = _fallback_slide(size=size, idx=i, total=total, message="A slide could not be rendered. Check the PDF for full details.")
             fallback.save(p, format="PNG", optimize=True)
         paths.append(p)
@@ -384,7 +388,7 @@ def main() -> None:
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out_dir = args.out_dir or os.path.join("assets", "carousels", ts)
     paths = build_carousel(jobs=jobs, out_dir=out_dir, max_per_category=args.max_per_category)
-    print(f"Generated {len(paths)} slides in {out_dir}")
+    logger.info("Generated %s slides in %s", len(paths), out_dir)
 
 
 if __name__ == "__main__":
