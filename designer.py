@@ -362,6 +362,7 @@ def build_carousel(
         idx += 1
 
     safe_path(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
     paths: list[str] = []
     for i, img in enumerate(slides, start=1):
         p = os.path.join(out_dir, f"slide_{i:02d}.png")
