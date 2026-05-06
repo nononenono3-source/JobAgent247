@@ -5,12 +5,14 @@ import json
 import os
 import re
 import shutil
+import textwrap
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
 from typing import Any, Literal, Optional
 
 from fpdf import FPDF
+from log_utils import get_logger
 
 
 Category = Literal["fresher", "pro", "uncategorized"]
@@ -30,6 +32,10 @@ _TEXT_REPLACEMENTS = str.maketrans(
     }
 )
 _MAX_UNBROKEN_CHARS = 50
+_MAX_DESCRIPTION_CHARS = 2000
+_PAGE_BOTTOM_GUARD_MM = 16
+
+logger = get_logger("pdf_generator")
 
 
 def _safe_text(value: Any, default: str = "") -> str:
@@ -37,6 +43,10 @@ def _safe_text(value: Any, default: str = "") -> str:
         return default
     text = str(value).strip()
     return text or default
+
+
+def _strip_control_chars(text: str) -> str:
+    return "".join(ch for ch in text if ch in "\n\t" or ord(ch) >= 32)
 
 
 @dataclass(frozen=True)
@@ -108,15 +118,88 @@ def _break_long_tokens(text: str, *, max_chars: int = _MAX_UNBROKEN_CHARS) -> st
     return "".join(wrapped)
 
 
-def clean_text(value: Any) -> str:
+def clean_text(value: Any, *, max_length: Optional[int] = None) -> str:
     """
     Normalize common Unicode punctuation from job feeds into ASCII-safe text for FPDF
     and force wrap opportunities into very long unbroken strings.
     """
-    text = str(value or "")
+    text = _safe_text(value)
     text = text.translate(_TEXT_REPLACEMENTS)
+    text = _strip_control_chars(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if max_length and len(text) > max_length:
+        text = text[: max_length - 3].rstrip() + "..."
     text = _break_long_tokens(text)
     return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def _wrap_pdf_text(text: str, *, width: int) -> list[str]:
+    cleaned = clean_text(text)
+    if not cleaned:
+        return [""]
+    return textwrap.wrap(
+        cleaned,
+        width=width,
+        break_long_words=True,
+        break_on_hyphens=False,
+        replace_whitespace=False,
+        drop_whitespace=False,
+    ) or [cleaned]
+
+
+def _ensure_vertical_space(pdf: FPDF, required_height: float) -> None:
+    if pdf.get_y() + required_height > pdf.h - max(pdf.b_margin, _PAGE_BOTTOM_GUARD_MM):
+        pdf.add_page()
+
+
+def _write_lines(pdf: FPDF, lines: list[str], *, line_height: float) -> None:
+    for line in lines:
+        _ensure_vertical_space(pdf, line_height)
+        pdf.cell(0, line_height, line, new_x="LMARGIN", new_y="NEXT")
+
+
+def _write_wrapped(pdf: FPDF, text: str, *, line_height: float, width: int, max_length: Optional[int] = None) -> None:
+    lines = _wrap_pdf_text(clean_text(text, max_length=max_length), width=width)
+    _write_lines(pdf, lines, line_height=line_height)
+
+
+def _estimate_job_height(job: Job) -> float:
+    title_lines = len(_wrap_pdf_text(job.title or "Untitled", width=70))
+    meta_lines = sum(
+        len(_wrap_pdf_text(value, width=95))
+        for value in [
+            f"Company: {job.company or 'Unknown'}",
+            f"Category: {job.category}",
+            f"Location: {job.location or 'Unknown'}",
+            f"Remote/WFH: {'Yes' if job.is_remote else 'No'}",
+            f"Salary: {_fmt_salary(job)}",
+            f"URL: {job.url or 'N/A'}",
+        ]
+    )
+    desc_lines = len(
+        _wrap_pdf_text(
+            clean_text(" ".join((job.description or "").split()), max_length=_MAX_DESCRIPTION_CHARS) or "N/A",
+            width=100,
+        )
+    )
+    return (title_lines * 7) + (meta_lines * 6) + 20 + (desc_lines * 5.5) + 18
+
+
+def _write_fallback_pdf(*, out_path: str, generated_at: str, job_count: int, error_message: str) -> None:
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    pdf = JobsPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=14)
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 12)
+    _write_wrapped(pdf, "JobAgent247 PDF generation hit a recoverable error.", line_height=7, width=80)
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "", 11)
+    _write_wrapped(pdf, f"Generated at (UTC): {generated_at or datetime.now(timezone.utc).isoformat()}", line_height=6, width=90)
+    _write_wrapped(pdf, f"Jobs fetched: {job_count}", line_height=6, width=90)
+    _write_wrapped(pdf, f"Details: {clean_text(error_message, max_length=800)}", line_height=6, width=90)
+    pdf.output(out_path)
 
 
 class JobsPDF(FPDF):
@@ -140,66 +223,74 @@ def generate_pdf(*, generated_at: str, jobs: list[Job], out_path: str) -> None:
     parent = os.path.dirname(out_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-
-    pdf = JobsPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=14)
-    pdf.add_page()
-
-    pdf.set_font("Helvetica", "", 12)
-    pdf.set_text_color(40, 44, 60)
     stamp = generated_at or datetime.now(timezone.utc).isoformat()
-    pdf.multi_cell(0, 6, clean_text(f"Generated at (UTC): {stamp}"))
-    pdf.ln(3)
+    try:
+        pdf = JobsPDF(orientation="P", unit="mm", format="A4")
+        pdf.set_auto_page_break(auto=True, margin=14)
+        pdf.add_page()
 
-    # Summary counts
-    by_cat = {
-        "fresher": sum(1 for j in jobs if j.category == "fresher"),
-        "pro": sum(1 for j in jobs if j.category == "pro"),
-        "uncategorized": sum(1 for j in jobs if j.category == "uncategorized"),
-    }
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.multi_cell(
-        0,
-        7,
-        clean_text(f"Jobs: {len(jobs)}   -   Freshers: {by_cat['fresher']}   -   Pros: {by_cat['pro']}"),
-    )
-    pdf.ln(2)
+        pdf.set_font("Helvetica", "", 12)
+        pdf.set_text_color(40, 44, 60)
+        _write_wrapped(pdf, f"Generated at (UTC): {stamp}", line_height=6, width=90)
+        pdf.ln(3)
 
-    for i, job in enumerate(jobs, start=1):
-        pdf.set_font("Helvetica", "B", 13)
-        pdf.set_text_color(15, 23, 42)
-        pdf.multi_cell(0, 7, clean_text(f"{i}. {job.title or 'Untitled'}"))
+        by_cat = {
+            "fresher": sum(1 for j in jobs if j.category == "fresher"),
+            "pro": sum(1 for j in jobs if j.category == "pro"),
+            "uncategorized": sum(1 for j in jobs if j.category == "uncategorized"),
+        }
+        pdf.set_font("Helvetica", "B", 12)
+        _write_wrapped(
+            pdf,
+            f"Jobs: {len(jobs)}   -   Freshers: {by_cat['fresher']}   -   Pros: {by_cat['pro']}",
+            line_height=7,
+            width=75,
+        )
+        pdf.ln(2)
 
-        pdf.set_font("Helvetica", "", 11)
-        pdf.set_text_color(60, 70, 95)
-        meta = [
-            f"Company: {job.company or 'Unknown'}",
-            f"Category: {job.category}",
-            f"Location: {job.location or 'Unknown'}",
-            f"Remote/WFH: {'Yes' if job.is_remote else 'No'}",
-            f"Salary: {_fmt_salary(job)}",
-            f"URL: {job.url or 'N/A'}",
-        ]
-        for m in meta:
-            pdf.multi_cell(0, 6, clean_text(m))
+        for i, job in enumerate(jobs, start=1):
+            try:
+                _ensure_vertical_space(pdf, max(_estimate_job_height(job), 28))
+                pdf.set_font("Helvetica", "B", 13)
+                pdf.set_text_color(15, 23, 42)
+                _write_wrapped(pdf, f"{i}. {job.title or 'No title provided'}", line_height=7, width=70, max_length=300)
 
-        pdf.ln(1)
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.set_text_color(15, 23, 42)
-        pdf.multi_cell(0, 6, clean_text("Description:"))
+                pdf.set_font("Helvetica", "", 11)
+                pdf.set_text_color(60, 70, 95)
+                meta = [
+                    f"Company: {job.company or 'Unknown'}",
+                    f"Category: {job.category}",
+                    f"Location: {job.location or 'Unknown'}",
+                    f"Remote/WFH: {'Yes' if job.is_remote else 'No'}",
+                    f"Salary: {_fmt_salary(job)}",
+                    f"URL: {job.url or 'N/A'}",
+                ]
+                for m in meta:
+                    _write_wrapped(pdf, m, line_height=6, width=95, max_length=600)
 
-        pdf.set_font("Helvetica", "", 11)
-        pdf.set_text_color(35, 40, 55)
-        desc = clean_text(" ".join((job.description or "").split()))
-        pdf.multi_cell(0, 5.5, desc if desc else "N/A")
+                pdf.ln(1)
+                pdf.set_font("Helvetica", "B", 11)
+                pdf.set_text_color(15, 23, 42)
+                _write_wrapped(pdf, "Description:", line_height=6, width=95)
 
-        pdf.ln(6)
-        pdf.set_draw_color(230, 235, 248)
-        y = pdf.get_y()
-        pdf.line(10, y, 200, y)
-        pdf.ln(7)
+                pdf.set_font("Helvetica", "", 11)
+                pdf.set_text_color(35, 40, 55)
+                desc = clean_text(" ".join((job.description or "").split()), max_length=_MAX_DESCRIPTION_CHARS) or "N/A"
+                _write_wrapped(pdf, desc, line_height=5.5, width=100)
 
-    pdf.output(out_path)
+                pdf.ln(6)
+                pdf.set_draw_color(230, 235, 248)
+                y = pdf.get_y()
+                pdf.line(10, y, 200, y)
+                pdf.ln(7)
+            except Exception:
+                logger.exception("Skipping PDF entry for job #%s due to rendering failure.", i)
+                continue
+
+        pdf.output(out_path)
+    except Exception as exc:
+        logger.exception("Primary PDF generation failed; writing fallback PDF.")
+        _write_fallback_pdf(out_path=out_path, generated_at=stamp, job_count=len(jobs), error_message=str(exc))
 
 
 def update_docs_index(*, docs_dir: str, created_pdf_filename: str) -> str:
@@ -268,16 +359,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    generated_at, jobs = _read_jobs_json(args.in_path)
-    if args.limit and args.limit > 0:
-        jobs = jobs[: args.limit]
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    name = args.name or f"jobs-{ts}.pdf"
-    out_path = os.path.join(args.docs_dir, name)
-    generate_pdf(generated_at=generated_at, jobs=jobs, out_path=out_path)
-    write_latest_alias(docs_dir=args.docs_dir, pdf_filename=name)
-    update_docs_index(docs_dir=args.docs_dir, created_pdf_filename=name)
-    print(f"Wrote PDF: {out_path}")
+    try:
+        generated_at, jobs = _read_jobs_json(args.in_path)
+        if args.limit and args.limit > 0:
+            jobs = jobs[: args.limit]
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        name = args.name or f"jobs-{ts}.pdf"
+        out_path = os.path.join(args.docs_dir, name)
+        generate_pdf(generated_at=generated_at, jobs=jobs, out_path=out_path)
+        write_latest_alias(docs_dir=args.docs_dir, pdf_filename=name)
+        update_docs_index(docs_dir=args.docs_dir, created_pdf_filename=name)
+        logger.info("Wrote PDF to %s", out_path)
+    except Exception:
+        logger.exception("pdf_generator main() failed.")
 
 
 if __name__ == "__main__":
