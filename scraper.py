@@ -11,6 +11,7 @@ from typing import Any, Iterable, Optional
 
 import requests
 
+from file_utils import write_json_atomic
 from log_utils import get_logger
 from models import Category, Job
 
@@ -301,11 +302,9 @@ def fetch_jobs(
     return jobs
 
 
-def write_json(path: str, jobs: list[Job]) -> None:
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    out = {
+def write_jobs_to_json(path: str, jobs: list[Job]) -> None:
+    """Prepare job data and write to JSON file atomically."""
+    payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "count": len(jobs),
         "by_category": {
@@ -315,8 +314,7 @@ def write_json(path: str, jobs: list[Job]) -> None:
         },
         "jobs": [asdict(j) for j in jobs],
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
+    write_json_atomic(path, payload)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -348,7 +346,7 @@ def main() -> None:
         remote=args.remote,
         max_days_old=args.max_days_old,
     )
-    write_json(args.out, jobs)
+    write_jobs_to_json(args.out, jobs)
     logger.info("Wrote %s jobs to %s", len(jobs), args.out)
 
 

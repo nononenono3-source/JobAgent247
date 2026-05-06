@@ -10,8 +10,9 @@ from html import escape
 from typing import Any, Optional
 
 from fpdf import FPDF
-from log_utils import get_logger
 
+from file_utils import copy_file_safe, safe_path, write_text_atomic
+from log_utils import get_logger
 from models import Category, Job, read_jobs_json, safe_text
 
 
@@ -132,9 +133,7 @@ def _estimate_job_height(job: Job) -> float:
 
 
 def _write_fallback_pdf(*, out_path: str, generated_at: str, job_count: int, error_message: str) -> None:
-    parent = os.path.dirname(out_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    safe_path(out_path, create_parent=True)
     pdf = JobsPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=14)
     pdf.add_page()
@@ -166,9 +165,7 @@ class JobsPDF(FPDF):
 
 
 def generate_pdf(*, generated_at: str, jobs: list[Job], out_path: str) -> None:
-    parent = os.path.dirname(out_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    safe_path(out_path, create_parent=True)
     stamp = generated_at or datetime.now(timezone.utc).isoformat()
     try:
         pdf = JobsPDF(orientation="P", unit="mm", format="A4")
@@ -244,7 +241,7 @@ def update_docs_index(*, docs_dir: str, created_pdf_filename: str) -> str:
     Writes/updates docs/index.html with a minimal listing of PDFs.
     Returns index file path.
     """
-    os.makedirs(docs_dir, exist_ok=True)
+    safe_path(docs_dir)
     pdfs = sorted([f for f in os.listdir(docs_dir) if f.lower().endswith(".pdf")])
     newest = created_pdf_filename
     items = "\n".join(
@@ -278,8 +275,7 @@ def update_docs_index(*, docs_dir: str, created_pdf_filename: str) -> str:
 </html>
 """
     index_path = os.path.join(docs_dir, "index.html")
-    with open(index_path, "w", encoding="utf-8") as f:
-        f.write(html)
+    write_text_atomic(index_path, html)
     return index_path
 
 
@@ -290,7 +286,7 @@ def write_latest_alias(*, docs_dir: str, pdf_filename: str) -> str:
     """
     src = os.path.join(docs_dir, pdf_filename)
     dst = os.path.join(docs_dir, "latest-jobs.pdf")
-    shutil.copyfile(src, dst)
+    copy_file_safe(src, dst)
     return dst
 
 

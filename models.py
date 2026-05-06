@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
+
+from file_utils import FileSystemError, read_json_safe
 
 
 def safe_text(value: Any, default: str = "") -> str:
@@ -32,8 +33,9 @@ class Job:
 
 
 def read_jobs_json(path: str) -> tuple[str, list[Job]]:
-    with open(path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
+    payload, err = read_json_safe(path)
+    if err:
+        raise FileSystemError(f"Failed to read jobs from {path}: {err}")
     generated_at = str(payload.get("generated_at", "")).strip() if isinstance(payload, dict) else ""
     jobs_raw = payload.get("jobs", payload) if isinstance(payload, dict) else payload
     jobs: list[Job] = []

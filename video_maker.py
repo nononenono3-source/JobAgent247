@@ -8,6 +8,7 @@ from typing import Literal, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
+from file_utils import safe_path
 from log_utils import get_logger
 from models import Category, Job, read_jobs_json
 
@@ -119,9 +120,7 @@ def build_voiceover_script(jobs: list[Job], *, pages_url: str) -> str:
 async def edge_tts_to_file(*, text: str, out_path: str, voice: str = "en-US-JennyNeural", rate: str = "+0%") -> None:
     import edge_tts  # lazy import
 
-    parent = os.path.dirname(out_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    safe_path(out_path, create_parent=True)
     communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
     await communicate.save(out_path)
 
@@ -132,9 +131,7 @@ def make_thumbnail(
     out_path: str,
     title: str = "HIRING NOW",
 ) -> str:
-    parent = os.path.dirname(out_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    safe_path(out_path, create_parent=True)
     img = Image.new("RGB", (1280, 720), (8, 12, 26))
     draw = ImageDraw.Draw(img)
 
@@ -201,9 +198,7 @@ def make_video_from_slides(
         _warn(f"MoviePy/FFmpeg dependencies unavailable; skipping video render: {exc}")
         return None
 
-    parent = os.path.dirname(out_path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+    safe_path(out_path, create_parent=True)
     if not slide_paths:
         _warn("No slides were available for video rendering.")
         return None
@@ -292,7 +287,7 @@ def main() -> None:
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out_dir = args.out_dir or os.path.join("assets", "videos", ts)
-    os.makedirs(out_dir, exist_ok=True)
+    safe_path(out_dir)
 
     try:
         carousel_dir = args.carousel_dir or _latest_carousel_dir()

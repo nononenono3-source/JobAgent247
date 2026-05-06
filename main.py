@@ -9,10 +9,11 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse
 
 from designer import build_carousel
+from file_utils import copy_file_safe, safe_path, write_json_atomic
 from log_utils import get_logger
 from models import read_jobs_json
 from pdf_generator import generate_pdf, update_docs_index, write_latest_alias
-from scraper import fetch_jobs, normalize_adzuna_country, write_json
+from scraper import fetch_jobs, normalize_adzuna_country, write_jobs_to_json
 
 
 logger = get_logger("main")
@@ -129,7 +130,7 @@ def run_scrape(*, country: str, pages: int, results_per_page: int, query: str) -
         max_days_old=10,
     )
     out = os.path.join("data", "jobs.json")
-    write_json(out, jobs)
+    write_jobs_to_json(out, jobs)
     return out
 
 
@@ -152,7 +153,7 @@ def export_instagram_slides_to_docs_assets(
     """
     from PIL import Image
 
-    os.makedirs(docs_assets_dir, exist_ok=True)
+    safe_path(docs_assets_dir)
     pngs = [f for f in os.listdir(carousel_dir) if f.lower().endswith(".png") and f.startswith("slide_")]
     pngs.sort()
     if not pngs:
@@ -174,16 +175,16 @@ def export_instagram_slides_to_docs_assets(
         raise RuntimeError(f"No slide JPGs could be exported from {carousel_dir}")
     while len(out_names) < 2:
         duplicate_name = f"slide_{len(out_names) + 1:02d}.jpg"
-        shutil.copyfile(
-            os.path.join(docs_assets_dir, out_names[0]),
-            os.path.join(docs_assets_dir, duplicate_name),
+        copy_file_safe(
+            src=os.path.join(docs_assets_dir, out_names[0]),
+            dst=os.path.join(docs_assets_dir, duplicate_name),
         )
         logger.warning("Duplicated %s as %s to preserve a valid Instagram carousel.", out_names[0], duplicate_name)
         out_names.append(duplicate_name)
 
     manifest = {"generated_at": datetime.now(timezone.utc).isoformat(), "slides": out_names}
-    with open(os.path.join(docs_assets_dir, "manifest.json"), "w", encoding="utf-8") as fp:
-        json.dump(manifest, fp, ensure_ascii=False, indent=2)
+    manifest_path = os.path.join(docs_assets_dir, "manifest.json")
+    write_json_atomic(manifest_path, manifest)
 
     return out_names
 
@@ -220,7 +221,7 @@ def run_youtube_video(*, jobs_json: str, carousel_dir: str) -> tuple[str, str]:
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out_dir = os.path.join("assets", "videos", ts)
-    os.makedirs(out_dir, exist_ok=True)
+    safe_path(out_dir)
 
     try:
         slides = _list_slide_images(carousel_dir)

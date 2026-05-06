@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+
+from file_utils import safe_path
 from typing import Any, Callable, TypeVar
 
 
@@ -34,9 +36,7 @@ def setup_logging() -> logging.Logger:
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
 
-    log_path = Path(os.getenv("PIPELINE_LOG_FILE", "pipeline.log"))
-    if log_path.parent and str(log_path.parent) not in {"", "."}:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path = safe_path(os.getenv("PIPELINE_LOG_FILE", "pipeline.log"))
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)

@@ -9,6 +9,7 @@ from typing import Literal
 
 from PIL import Image, ImageDraw, ImageFont
 
+from file_utils import safe_path
 from log_utils import get_logger
 from models import Category, Job, read_jobs_json
 
@@ -360,7 +361,7 @@ def build_carousel(
             slides.append(_fallback_slide(size=size, idx=idx, total=total, message=f"Job slide unavailable for {j.title or 'this role'}. Check the PDF for full details."))
         idx += 1
 
-    os.makedirs(out_dir, exist_ok=True)
+    safe_path(out_dir)
     paths: list[str] = []
     for i, img in enumerate(slides, start=1):
         p = os.path.join(out_dir, f"slide_{i:02d}.png")
