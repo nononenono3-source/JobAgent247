@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import shutil
 import textwrap
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from fpdf import FPDF
 from log_utils import get_logger
 
-
-Category = Literal["fresher", "pro", "uncategorized"]
+from models import Category, Job, read_jobs_json, safe_text
 
 
 _TEXT_REPLACEMENTS = str.maketrans(
@@ -38,59 +35,8 @@ _PAGE_BOTTOM_GUARD_MM = 16
 logger = get_logger("pdf_generator")
 
 
-def _safe_text(value: Any, default: str = "") -> str:
-    if value is None:
-        return default
-    text = str(value).strip()
-    return text or default
-
-
 def _strip_control_chars(text: str) -> str:
     return "".join(ch for ch in text if ch in "\n\t" or ord(ch) >= 32)
-
-
-@dataclass(frozen=True)
-class Job:
-    category: Category
-    title: str
-    company: str
-    location: str
-    is_remote: bool
-    salary_min: Optional[float]
-    salary_max: Optional[float]
-    salary_currency: Optional[str]
-    url: str
-    description: str
-    source: str
-    country: str
-
-
-def _read_jobs_json(path: str) -> tuple[str, list[Job]]:
-    with open(path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-    generated_at = str(payload.get("generated_at", "")).strip() if isinstance(payload, dict) else ""
-    jobs_raw = payload.get("jobs", payload) if isinstance(payload, dict) else payload
-    jobs: list[Job] = []
-    for item in jobs_raw if isinstance(jobs_raw, list) else []:
-        if not isinstance(item, dict):
-            continue
-        jobs.append(
-            Job(
-                category=_safe_text(item.get("category"), "uncategorized"),
-                title=_safe_text(item.get("title"), "No title provided"),
-                company=_safe_text(item.get("company")),
-                location=_safe_text(item.get("location")),
-                is_remote=bool(item.get("is_remote", False)),
-                salary_min=item.get("salary_min"),
-                salary_max=item.get("salary_max"),
-                salary_currency=item.get("salary_currency"),
-                url=_safe_text(item.get("url")),
-                description=_safe_text(item.get("description"), "No description provided"),
-                source=_safe_text(item.get("source")),
-                country=_safe_text(item.get("country")),
-            )
-        )
-    return generated_at, jobs
 
 
 def _fmt_salary(job: Job) -> str:
@@ -123,7 +69,7 @@ def clean_text(value: Any, *, max_length: Optional[int] = None) -> str:
     Normalize common Unicode punctuation from job feeds into ASCII-safe text for FPDF
     and force wrap opportunities into very long unbroken strings.
     """
-    text = _safe_text(value)
+    text = safe_text(value)
     text = text.translate(_TEXT_REPLACEMENTS)
     text = _strip_control_chars(text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -360,7 +306,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_arg_parser().parse_args()
     try:
-        generated_at, jobs = _read_jobs_json(args.in_path)
+        generated_at, jobs = read_jobs_json(args.in_path)
         if args.limit and args.limit > 0:
             jobs = jobs[: args.limit]
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

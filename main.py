@@ -8,8 +8,9 @@ import sys
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse
 
-from designer import build_carousel, _read_jobs_json as read_jobs_for_design
-from pdf_generator import _read_jobs_json as read_jobs_for_pdf, generate_pdf, update_docs_index, write_latest_alias
+from designer import build_carousel
+from models import read_jobs_json
+from pdf_generator import generate_pdf, update_docs_index, write_latest_alias
 from scraper import fetch_jobs, normalize_adzuna_country, write_json
 
 
@@ -129,7 +130,7 @@ def run_scrape(*, country: str, pages: int, results_per_page: int, query: str) -
 
 
 def run_carousel(*, jobs_json: str) -> str:
-    jobs = read_jobs_for_design(jobs_json)
+    _, jobs = read_jobs_json(jobs_json)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out_dir = os.path.join("assets", "carousels", ts)
     build_carousel(jobs=jobs, out_dir=out_dir, max_per_category=5)
@@ -184,7 +185,7 @@ def export_instagram_slides_to_docs_assets(
 
 
 def run_pdf(*, jobs_json: str) -> str:
-    generated_at, jobs = read_jobs_for_pdf(jobs_json)
+    generated_at, jobs = read_jobs_json(jobs_json)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     name = f"jobs-{ts}.pdf"
     out_path = os.path.join("docs", name)
@@ -202,7 +203,6 @@ def run_youtube_video(*, jobs_json: str, carousel_dir: str) -> tuple[str, str]:
     """
     from video_maker import (
         _list_slide_images,
-        _read_jobs_json as read_jobs_for_video,
         build_voiceover_script,
         edge_tts_to_file,
         make_thumbnail,
@@ -212,7 +212,7 @@ def run_youtube_video(*, jobs_json: str, carousel_dir: str) -> tuple[str, str]:
     import asyncio
 
     pages_url = ensure_pages_url()
-    _, jobs = read_jobs_for_video(jobs_json)
+    _, jobs = read_jobs_json(jobs_json)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out_dir = os.path.join("assets", "videos", ts)

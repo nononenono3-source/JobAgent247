@@ -5,16 +5,16 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any, Iterable, Literal, Optional
+from typing import Any, Iterable, Optional
 
 import requests
 
+from models import Category, Job
+
 
 DEFAULT_ADZUNA_COUNTRY = "in"
-
-Category = Literal["fresher", "pro", "uncategorized"]
 
 
 def normalize_adzuna_country(code: str | None) -> str:
@@ -28,20 +28,6 @@ def normalize_adzuna_country(code: str | None) -> str:
     return c if c else DEFAULT_ADZUNA_COUNTRY
 
 
-@dataclass(frozen=True)
-class Job:
-    category: Category
-    title: str
-    company: str
-    location: str
-    is_remote: bool
-    salary_min: Optional[float]
-    salary_max: Optional[float]
-    salary_currency: Optional[str]
-    url: str
-    description: str
-    source: str
-    country: str
 
 
 class AdzunaClient:
